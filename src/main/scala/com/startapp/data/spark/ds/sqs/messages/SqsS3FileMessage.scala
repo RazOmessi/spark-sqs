@@ -5,7 +5,7 @@ import play.api.libs.json._
 import play.api.libs.functional.syntax._
 
 case class SqsS3FileMessage(bucketName: String, fileName: String) extends SqsMessage {
-  override def toString: String = s"$bucketName/$fileName"
+  override def toString: String = s"$bucketName/$fileName".replace("%3D", "=")
 }
 
 object SqsS3FileMessage {

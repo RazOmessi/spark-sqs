@@ -36,7 +36,7 @@ class SqsShutdownDeletePolicy(sqsClient: SqsClient, messages: List[Message]) ext
       override def run(): Unit = {
         if(flag){
           logger.info("application shutdown. committing SQS messages.")
-          //commitMessages()
+          commitMessages()
         } else {
           logger.info("application shutdown. messages will not be deleted from SQS.")
         }

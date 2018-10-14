@@ -11,10 +11,9 @@ import play.api.libs.json.{JsResult, JsValue}
 
 import scala.collection.JavaConversions._
 
-class SqsClient private (sqs: AmazonSQS, queueUrl: String, minMessages: Int, maxMessages : Int) {
-  private def _getMessages[T <: SqsMessage](messages: List[Message], results: List[T], validator: JsValue => JsResult[Seq[T]], maxRetries : Int) : SqsMessagesResponse[T] = {
-    if (maxRetries < 0 || results.length == maxMessages) {
-
+class SqsClient private (sqs: AmazonSQS, queueUrl: String, minMessages: Int, maxMessages: Int, maxEmptyResponses: Int) {
+  private def _getMessages[T <: SqsMessage](messages: List[Message], results: List[T], validator: JsValue => JsResult[Seq[T]], maxRetries : Int, emptyResponses: Int = 0) : SqsMessagesResponse[T] = {
+    if (emptyResponses >= maxEmptyResponses || maxRetries < 0 || results.length == maxMessages) {
       if(results.length < minMessages){
         sys.error(s"Queue does not contains enough messages.")
       }
@@ -28,7 +27,12 @@ class SqsClient private (sqs: AmazonSQS, queueUrl: String, minMessages: Int, max
       .map(_.fold(_ => None, msg => Some(msg)))
       .filter(_.isDefined).flatMap(_.get)
 
-    _getMessages((messages ++ newMessages).distinct, (results ++ newResults).distinct, validator, maxRetries - 1)
+    val newEmptyResponses = if ((messages ++ newMessages).distinct.length - messages.length == 0)
+      emptyResponses + 1
+    else
+      0
+
+    _getMessages((messages ++ newMessages).distinct, (results ++ newResults).distinct, validator, maxRetries - 1, newEmptyResponses)
   }
 
   def getMessages[T <: SqsMessage](validator: JsValue => JsResult[Seq[T]]) : SqsMessagesResponse[T] = _getMessages(List.empty[Message], List.empty[T], validator, maxMessages / 10 + 10)
@@ -37,36 +41,42 @@ class SqsClient private (sqs: AmazonSQS, queueUrl: String, minMessages: Int, max
 }
 
 object SqsClient {
-  class SqsClientBuilder private (queueUrl: String, credentials: Option[AWSCredentialsProvider], region: Option[Regions], minMessages: Int, maxMessages: Int) {
-    def this(queueUrl: String) = this(queueUrl, None, None, 0, Int.MaxValue)
+  class SqsClientBuilder private (queueUrl: String, credentials: Option[AWSCredentialsProvider], region: Option[Regions], minMessages: Int, maxMessages: Int, maxEmptyResponses: Int) {
+    def this(queueUrl: String) = this(queueUrl, None, None, 0, Int.MaxValue, 10)
 
     def getQueueUrl = queueUrl
     def getCredentials = credentials
     def getRegion = region
     def getMinMessages = minMessages
     def getMaxMessages = maxMessages
+    def getMaxEmptyResponses = maxEmptyResponses
 
     def withCredentials(accessKey: String, accessSecret: String) : SqsClientBuilder = {
       val credentials = new BasicAWSCredentialsProvider(accessKey, accessSecret)
-      new SqsClientBuilder(queueUrl, Some(credentials), region, minMessages, maxMessages)
+      new SqsClientBuilder(queueUrl, Some(credentials), region, minMessages, maxMessages, maxEmptyResponses)
     }
 
     def withMinimumMessages(minimumMessages: Int) : SqsClientBuilder = {
       val min = Math.max(0, minimumMessages)
       val max = Math.max(min, maxMessages)
 
-      new SqsClientBuilder(queueUrl, credentials, region, min, max)
+      new SqsClientBuilder(queueUrl, credentials, region, min, max, maxEmptyResponses)
     }
 
     def withMaximumMessages(maximumMessages: Int) : SqsClientBuilder = {
       val max = Math.max(1, maximumMessages)
       val min = Math.min(minMessages, max)
 
-      new SqsClientBuilder(queueUrl, credentials, region, min, max)
+      new SqsClientBuilder(queueUrl, credentials, region, min, max, maxEmptyResponses)
     }
 
     def withRegion(region: Option[Regions]) : SqsClientBuilder = {
-      new SqsClientBuilder(queueUrl, credentials, region, minMessages, maxMessages)
+      new SqsClientBuilder(queueUrl, credentials, region, minMessages, maxMessages, maxEmptyResponses)
+    }
+
+    def withMaxEmptyResponses(maxEmptyResponses: Int) : SqsClientBuilder = {
+      val max = Math.max(1, maxEmptyResponses)
+      new SqsClientBuilder(queueUrl, credentials, region, minMessages, maxMessages, max)
     }
 
     def build(): SqsClient = SqsClient.apply(this)
@@ -79,6 +89,6 @@ object SqsClient {
       new AmazonSQSClient()
     }
 
-    new SqsClient(sqsClient, builder.getQueueUrl, builder.getMinMessages, builder.getMaxMessages)
+    new SqsClient(sqsClient, builder.getQueueUrl, builder.getMinMessages, builder.getMaxMessages, builder.getMaxEmptyResponses)
   }
 }
